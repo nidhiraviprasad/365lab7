@@ -3,6 +3,12 @@ import mysql.connector
 import datetime
 from decimal import Decimal
 import pandas as pd
+import warnings
+
+warnings.filterwarnings('ignore')
+
+
+
 
 def connect():
     db_password = getpass.getpass()
@@ -12,12 +18,13 @@ def connect():
     return conn
 
 
+
+
 # view popular rooms
 # TODO: format this table nicely with headers for each column
 def fr1(conn):
     print("Here are our rooms, sorted by popularity: ")
-    cursor = conn.cursor()
-    cursor.execute("""
+    query = """
                    
 SELECT r.RoomCode, r.RoomName, r.Beds, r.bedType, r.maxOcc, r.basePrice, r.decor,
     ROUND(
@@ -59,11 +66,10 @@ SELECT r.RoomCode, r.RoomName, r.Beds, r.bedType, r.maxOcc, r.basePrice, r.decor
 from lab7_rooms r
 ORDER BY Popularity desc;
                    
-                   """)
-    result = cursor.fetchall()
+                   """
+    result = pd.read_sql(query, conn)
     print(result)
     conn.commit()
-    cursor.close()
 
 
 
@@ -102,8 +108,7 @@ def fr2(conn):
     ci = checkin.strftime("%Y-%m-%d")
     co = checkout.strftime("%Y-%m-%d")
 
-    cursor = conn.cursor()
-    cursor.execute("""
+    room_details = pd.read_sql("""
 select *
 from lab7_rooms r
 where (r.RoomCode = %s or %s = 'Any' or %s = '')
@@ -112,33 +117,32 @@ and r.maxOcc >= %s
 and ( 
     select count(*)
     from lab7_reservations res
-    where (r.RoomCode = res.Room or %s = 'Any' or %s = '')
+    join lab7_rooms r on r.RoomCode = res.Room
+    where (r.RoomCode = %s)
     and (
-        (res.CheckIn >= %s and res.Checkout <= %s) or
-        (res.CheckIn <= %s and res.Checkout >= %s) or
-        (res.CheckIn <= %s and res.Checkout >= %s)
+        (res.CheckIn >= %s and res.Checkout < %s) or
+        (res.CheckIn <= %s and res.Checkout > %s) or
+        (res.CheckIn <= %s and res.Checkout > %s)
         )
     ) = 0;
-                   """, [code, code, code, bed, bed, bed, str(numOccupants), code, code, ci, co, co, co, ci, ci])
+                   """, conn, params=(code, code, code, bed, bed, bed, numOccupants, code, ci, co, co, co, ci, ci))
     
-    room_details = cursor.fetchall()
-    if (room_details):
+    if (not room_details.empty):
         print("\nHere are all the rooms available according to your criteria: \n")
-        for i in range(len(room_details)):
-            print(f"{i + 1}: {room_details[i]}")
+        room_details.index = room_details.index + 1
+        print(room_details)
         room = input("\nWhich of the above rooms would you like to book? Please enter the option number: ")
         while not room.isnumeric() or int(room) > len(room_details) or int(room) < 1:
             room = input("Invalid room selection. Please select from the given options: ")
         room = int(room) - 1
 
-        basePrice = float(room_details[room][5])
+        basePrice = float(room_details.iloc[room, 5])
 
-        cursor.execute("""
+        result = pd.read_sql("""
 select max(CODE) from lab7_reservations;
-                       """)
-        result = cursor.fetchall()
-        if result:
-            newCode = str(int(result[0][0]) + 1)
+                       """, conn)
+        if not result.empty:
+            newCode = str(result.iloc[0, 0] + 1)
         else:
             newCode = 1
 
@@ -155,16 +159,17 @@ select max(CODE) from lab7_reservations;
         
         costOfStay = basePrice * numWeekdays + basePrice * 1.1 * numWeekends
 
-
+        cursor = conn.cursor()
         cursor.execute("""
 insert into lab7_reservations 
 (CODE, Room, CheckIn, Checkout, Rate, LastName, FirstName, Adults, Kids)
 values (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-                       """, [newCode, room_details[room][0], ci, co, Decimal(costOfStay), l_name, f_name, int(adults), int(children)])
+                       """, [newCode, room_details.iloc[room, 0], ci, co, Decimal(costOfStay), l_name, f_name, int(adults), int(children)])
+        res = cursor.fetchall()
+        cursor.close()
         
-        
-        print(f"\nConfirmed! {f_name} {l_name} has booked room {room_details[room][0]}: {room_details[room][1]}." +
-              f"\nBed type: {room_details[room][3]}" +
+        print(f"\nConfirmed! {f_name} {l_name} has booked room {room_details.iloc[room, 0]}: {room_details.iloc[room, 1]}." +
+              f"\nBed type: {room_details.iloc[room, 3]}" +
               f"\nDates: {ci} to {co}" +
               f"\nOccupants: {adults} adults and {children} children" +
               f"\nTotal cost: ${costOfStay:.2f}" + 
@@ -173,42 +178,40 @@ values (%s, %s, %s, %s, %s, %s, %s, %s, %s);
             
     else:
 
-        cursor.execute("""
+        result = pd.read_sql("""
 select count(*)
 from lab7_rooms r
 where (r.maxOcc >= %s);
-                       """, [str(numOccupants)])
-        result = cursor.fetchall()
-        if (int(result[0][0]) == 0):
+                       """, conn, params=(str(numOccupants),))
+        if (result.iloc[0, 0] == 0):
             print("Unfortunately, the number of people you are making a reservation for exceeds the maximum occupancy of all available rooms.")
             return
 
         
-        cursor.execute("""
-
+        alternate_rooms = pd.read_sql("""
 select r.*
 from lab7_rooms r
 where r.maxOcc >= %s
 and (
     select count(*)
     from lab7_reservations res
-    where (r.RoomCode = res.Room or r.RoomCode = '' or r.RoomCode = 'Any')
+    join lab7_rooms r on r.RoomCode = res.Room
+    where (r.RoomCode = %s)
     and (
-        (res.CheckIn >= %s and res.Checkout <= %s) or
-        (res.CheckIn <= %s and res.Checkout >= %s) or
-        (res.CheckIn <= %s and res.Checkout >= %s)
+        (res.CheckIn >= %s and res.Checkout < %s) or
+        (res.CheckIn <= %s and res.Checkout > %s) or
+        (res.CheckIn <= %s and res.Checkout > %s)
         )
 ) = 0
 order by abs(r.basePrice - 
     coalesce((select basePrice from lab7_rooms where RoomCode = %s), 0)
 );
-                   """, [str(numOccupants), ci, co, ci, ci, co, co, code])
+                   """, conn, params=(str(numOccupants), code, ci, co, ci, ci, co, co, code))
     
 
-        alternate_rooms = cursor.fetchall()
         print("\nUnfortunately, we were not able to find any rooms according to your criteria. Here are some similar rooms you can reserve: \n")
-        for i in range(min(5, len(alternate_rooms))):
-            print(f"{i + 1}: {alternate_rooms[i]}")
+        alternate_rooms.index = alternate_rooms.index + 1
+        print(alternate_rooms)
 
         confirmation = input("\nWould you like to book any of the above rooms? [Y to confirm; any other key to cancel] " ).strip()
         if (not confirmation == 'Y' and not confirmation == 'y'):
@@ -221,16 +224,15 @@ order by abs(r.basePrice -
         room = int(room) - 1
 
 
-        basePrice = float(alternate_rooms[room][5])
+        basePrice = float(alternate_rooms.iloc[room, 5])
 
-        cursor.execute("""
+        result = pd.read_sql("""
 select max(CODE) from lab7_reservations;
-                       """)
-        result = cursor.fetchall()
-        if result:
-            newCode = str(int(result[0][0]) + 1)
-        else:
+                       """, conn)
+        if result.empty:
             newCode = 1
+        else:
+            newCode = str(result.iloc[0, 0] + 1)
 
         numWeekdays = 0
         numWeekends = 0
@@ -245,15 +247,15 @@ select max(CODE) from lab7_reservations;
         
         costOfStay = basePrice * numWeekdays + basePrice * 1.1 * numWeekends
 
-        cursor.execute("""
+        pd.read_sql("""
 insert into lab7_reservations 
 (CODE, Room, CheckIn, Checkout, Rate, LastName, FirstName, Adults, Kids)
 values (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-                       """, [newCode, alternate_rooms[room][0], ci, co, Decimal(costOfStay), l_name, f_name, int(adults), int(children)])
+                       """, conn, params=(newCode, alternate_rooms.iloc[room, 0], ci, co, Decimal(costOfStay), l_name, f_name, int(adults), int(children)))
         
         
-        print(f"\nConfirmed! {f_name} {l_name} has booked room {alternate_rooms[room][0]}: {alternate_rooms[room][1]}." +
-              f"\nBed type: {alternate_rooms[room][3]}" +
+        print(f"\nConfirmed! {f_name} {l_name} has booked room {alternate_rooms.iloc[room, 0]}: {alternate_rooms.iloc[room, 1]}." +
+              f"\nBed type: {alternate_rooms.iloc[room, 3]}" +
               f"\nDates: {ci} to {co}" +
               f"\nOccupants: {adults} adults and {children} children" +
               f"\nTotal cost: ${costOfStay:.2f}" + 
@@ -261,12 +263,11 @@ values (%s, %s, %s, %s, %s, %s, %s, %s, %s);
 
     
     conn.commit()
-    cursor.close()
 
 
 
 
-        
+
 
 
 # cancel a reservation
@@ -275,12 +276,11 @@ def fr3(conn):
     code = input("Please enter the reservation code for the reservation you would like to cancel: ").strip()
     cursor = conn.cursor()
 
-    query = f"""
+    result = pd.read_sql("""
 SELECT *
 from lab7_reservations
-WHERE CODE = {code}
-                   """
-    result = pd.read_sql(query, conn)
+WHERE CODE = %s
+                   """, conn, params = (code, ))
     
     if (not result.empty):
         print("Reservation details: ")
@@ -318,16 +318,19 @@ def fr4(conn):
     code = input("Room code: ").strip()
     res_code = input("Reservation code: ").strip()
 
-    start = start.split('/')
-    end = end.split('/')
-    start = datetime.date(int(start[2]), int(start[0]), int(start[1]))
-    end = datetime.date(int(end[2]), int(end[0]), int(end[1]))
+    s_date = 0
+    e_date = 0
 
-    s_date = start.strftime("%Y-%m-%d")
-    e_date = end.strftime("%Y-%m-%d")
+    if (not start == ''):
+        start = start.split('/')
+        start = datetime.date(int(start[2]), int(start[0]), int(start[1]))
+        s_date = start.strftime("%Y-%m-%d")
+    if (not end == ''):
+        end = end.split('/')
+        end = datetime.date(int(end[2]), int(end[0]), int(end[1]))
+        e_date = end.strftime("%Y-%m-%d")
 
-    cursor = conn.cursor()
-    cursor.execute("""
+    result = pd.read_sql("""
 select * from lab7_reservations res
 join lab7_rooms r on r.RoomCode = res.Room
 where (res.FirstName like concat('%', concat(%s, '%')) or %s = '')
@@ -335,17 +338,20 @@ and (res.LastName like concat('%', concat(%s, '%')) or %s = '')
 and (res.Room like concat('%', concat(%s, '%')) or %s = '')
 and (res.CODE = %s or %s = '')
 and (
-        (res.CheckIn >= %s and res.Checkout <= %s) or
-        (res.CheckIn <= %s and res.Checkout >= %s) or
-        (res.CheckIn <= %s and res.Checkout >= %s)
+        case 
+            when (%s <> '' and %s <> '') then
+            ((res.CheckIn >= %s and res.Checkout <= %s) or
+            (res.CheckIn <= %s and res.Checkout >= %s) or
+            (res.CheckIn <= %s and res.Checkout >= %s))
+            else 1=1
+        end
+            
     )
 order by res.CheckIn;
-                   """, [f_name, f_name, l_name, l_name, code, code, res_code, res_code, s_date, e_date, s_date, s_date, e_date, e_date])    
-
-    result = cursor.fetchall()
+                   """, conn, params=(f_name, f_name, l_name, l_name, code, code, res_code, res_code, s_date, e_date, s_date, e_date, s_date, s_date, e_date, e_date))    
+    result.index = result.index + 1
     print(result)
     conn.commit()
-    cursor.close()
 
 
 
@@ -420,6 +426,7 @@ from dailyRevenue);
                  """
     
     df = pd.read_sql(query, conn)
+    df.index = df.index + 1
     print(df)
 
 
@@ -468,6 +475,7 @@ def main():
         quit = input("Would you like to continue your session? [Y/N] ")
         if quit.strip()[0] == 'N' or quit.strip()[0] == 'n':
             print("Thank you for using the Cuties Inn room reservation system! Have a fantabulous day!")
+            conn.close()
             break
 
 
