@@ -274,13 +274,15 @@ values (%s, %s, %s, %s, %s, %s, %s, %s, %s);
 def fr3(conn):
     code = input("Please enter the reservation code for the reservation you would like to cancel: ").strip()
     cursor = conn.cursor()
-    cursor.execute("""
+
+    query = f"""
 SELECT *
 from lab7_reservations
-WHERE CODE = %s
-                   """, [code])
-    result = cursor.fetchall()
-    if (result):
+WHERE CODE = {code}
+                   """
+    result = pd.read_sql(query, conn)
+    
+    if (not result.empty):
         print("Reservation details: ")
         print(result)
         confirmation = input("Are you sure you would like to cancel the above reservation? [Y to confirm; any other key to cancel] " ).strip()
