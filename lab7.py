@@ -2,6 +2,7 @@ import getpass
 import mysql.connector
 import datetime
 from decimal import Decimal
+import pandas as pd
 
 def connect():
     db_password = getpass.getpass()
@@ -12,6 +13,7 @@ def connect():
 
 
 # view popular rooms
+# TODO: format this table nicely with headers for each column
 def fr1(conn):
     print("Here are our rooms, sorted by popularity: ")
     cursor = conn.cursor()
@@ -60,10 +62,17 @@ ORDER BY Popularity desc;
                    """)
     result = cursor.fetchall()
     print(result)
+    conn.commit()
     cursor.close()
 
 
+
+
+
+
+
 # make a reservation
+# TODO: format the available rooms nicely to the user (in a table format with headers for each column)
 def fr2(conn):
     print("Please enter the following information to make your reservation: ")
     f_name = input("First name: ").strip()
@@ -72,8 +81,8 @@ def fr2(conn):
     bed = input("Bed type (enter 'Any' if you have no preference): ").strip()
     checkin = input("Check in date (MM/DD/YYYY): ").strip()
     checkout = input("Check out date (MM/DD/YYYY): ").strip()
-    children = input("Number of children: ").strip()
     adults = input("Number of adults: ").strip()
+    children = input("Number of children: ").strip()
 
     # perform input validation here before continuing with query
     checkin = checkin.split('/')
@@ -114,9 +123,10 @@ and (
     
     room_details = cursor.fetchall()
     if (room_details):
+        print("\nHere are all the rooms available according to your criteria: \n")
         for i in range(len(room_details)):
             print(f"{i + 1}: {room_details[i]}")
-        room = input("Which of the following rooms would you like to book? Please enter the option number: ")
+        room = input("\nWhich of the above rooms would you like to book? Please enter the option number: ")
         while not room.isnumeric() or int(room) > len(room_details) or int(room) < 1:
             room = input("Invalid room selection. Please select from the given options: ")
         room = int(room) - 1
@@ -144,28 +154,114 @@ select max(CODE) from lab7_reservations;
             currentDate += delta
         
         costOfStay = basePrice * numWeekdays + basePrice * 1.1 * numWeekends
-        costOfStay = "Decimal('" + str(costOfStay) + "')"
+
 
         cursor.execute("""
 insert into lab7_reservations 
 (CODE, Room, CheckIn, Checkout, Rate, LastName, FirstName, Adults, Kids)
 values (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-                       """, [newCode, room_details[room][0], ci, co, costOfStay, l_name, f_name, adults, children])
+                       """, [newCode, room_details[room][0], ci, co, Decimal(costOfStay), l_name, f_name, int(adults), int(children)])
         
         
         print(f"\nConfirmed! {f_name} {l_name} has booked room {room_details[room][0]}: {room_details[room][1]}." +
               f"\nBed type: {room_details[room][3]}" +
               f"\nDates: {ci} to {co}" +
               f"\nOccupants: {adults} adults and {children} children" +
-              f"\nTotal cost: {costOfStay}" + 
+              f"\nTotal cost: ${costOfStay:.2f}" + 
               f"\nConfirmation code: {newCode}\n")
         
-        
-
-
             
     else:
-        print("womp womp")
+
+        cursor.execute("""
+select count(*)
+from lab7_rooms r
+where (r.maxOcc >= %s);
+                       """, [str(numOccupants)])
+        result = cursor.fetchall()
+        if (int(result[0][0]) == 0):
+            print("Unfortunately, the number of people you are making a reservation for exceeds the maximum occupancy of all available rooms.")
+            return
+
+        
+        cursor.execute("""
+
+select r.*
+from lab7_rooms r
+where r.maxOcc >= %s
+and (
+    select count(*)
+    from lab7_reservations res
+    where (r.RoomCode = res.Room or r.RoomCode = '' or r.RoomCode = 'Any')
+    and (
+        (res.CheckIn >= %s and res.Checkout <= %s) or
+        (res.CheckIn <= %s and res.Checkout >= %s) or
+        (res.CheckIn <= %s and res.Checkout >= %s)
+        )
+) = 0
+order by abs(r.basePrice - 
+    coalesce((select basePrice from lab7_rooms where RoomCode = %s), 0)
+);
+                   """, [str(numOccupants), ci, co, ci, ci, co, co, code])
+    
+
+        alternate_rooms = cursor.fetchall()
+        print("\nUnfortunately, we were not able to find any rooms according to your criteria. Here are some similar rooms you can reserve: \n")
+        for i in range(min(5, len(alternate_rooms))):
+            print(f"{i + 1}: {alternate_rooms[i]}")
+
+        confirmation = input("\nWould you like to book any of the above rooms? [Y to confirm; any other key to cancel] " ).strip()
+        if (not confirmation == 'Y' and not confirmation == 'y'):
+            print("No booking was made. ")
+            return
+        
+        room = input("\nWhich of the above rooms would you like to book? Please enter the option number: ")
+        while not room.isnumeric() or int(room) > min(5, len(alternate_rooms)) or int(room) < 1:
+            room = input("Invalid room selection. Please select from the given options: ")
+        room = int(room) - 1
+
+
+        basePrice = float(alternate_rooms[room][5])
+
+        cursor.execute("""
+select max(CODE) from lab7_reservations;
+                       """)
+        result = cursor.fetchall()
+        if result:
+            newCode = str(int(result[0][0]) + 1)
+        else:
+            newCode = 1
+
+        numWeekdays = 0
+        numWeekends = 0
+        currentDate = checkin
+        delta = datetime.timedelta(days=1)
+        while currentDate < checkout:
+            if currentDate.weekday() > 4:
+                numWeekends += 1
+            else:
+                numWeekdays +=1
+            currentDate += delta
+        
+        costOfStay = basePrice * numWeekdays + basePrice * 1.1 * numWeekends
+
+        cursor.execute("""
+insert into lab7_reservations 
+(CODE, Room, CheckIn, Checkout, Rate, LastName, FirstName, Adults, Kids)
+values (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                       """, [newCode, alternate_rooms[room][0], ci, co, Decimal(costOfStay), l_name, f_name, int(adults), int(children)])
+        
+        
+        print(f"\nConfirmed! {f_name} {l_name} has booked room {alternate_rooms[room][0]}: {alternate_rooms[room][1]}." +
+              f"\nBed type: {alternate_rooms[room][3]}" +
+              f"\nDates: {ci} to {co}" +
+              f"\nOccupants: {adults} adults and {children} children" +
+              f"\nTotal cost: ${costOfStay:.2f}" + 
+              f"\nConfirmation code: {newCode}\n")
+
+    
+    conn.commit()
+    cursor.close()
 
 
 
@@ -174,6 +270,7 @@ values (%s, %s, %s, %s, %s, %s, %s, %s, %s);
 
 
 # cancel a reservation
+# TODO: format the reservation details nicely when printed out to user
 def fr3(conn):
     code = input("Please enter the reservation code for the reservation you would like to cancel: ").strip()
     cursor = conn.cursor()
@@ -198,17 +295,132 @@ WHERE CODE = %s
             print("Your reservation was not cancelled. ")
     else:
         print("Your reservation with code", code, "was not found in the system. ")
+    conn.commit()
     cursor.close()
+
+
+
+
+
+
+
 
 
 # view reservation details
 def fr4(conn):
-    pass
+    print("Enter the following information to look up reservation details: ")
+    f_name = input("First name: ").strip()
+    l_name = input("Last name: ").strip()
+    start = input("Start date (MM/DD/YYYY): ").strip()
+    end = input("End date (MM/DD/YYYY): ").strip()
+    code = input("Room code: ").strip()
+    res_code = input("Reservation code: ").strip()
+
+    start = start.split('/')
+    end = end.split('/')
+    start = datetime.date(int(start[2]), int(start[0]), int(start[1]))
+    end = datetime.date(int(end[2]), int(end[0]), int(end[1]))
+
+    s_date = start.strftime("%Y-%m-%d")
+    e_date = end.strftime("%Y-%m-%d")
+
+    cursor = conn.cursor()
+    cursor.execute("""
+select * from lab7_reservations res
+join lab7_rooms r on r.RoomCode = res.Room
+where (res.FirstName like concat('%', concat(%s, '%')) or %s = '')
+and (res.LastName like concat('%', concat(%s, '%')) or %s = '')
+and (res.Room like concat('%', concat(%s, '%')) or %s = '')
+and (res.CODE = %s or %s = '')
+and (
+        (res.CheckIn >= %s and res.Checkout <= %s) or
+        (res.CheckIn <= %s and res.Checkout >= %s) or
+        (res.CheckIn <= %s and res.Checkout >= %s)
+    )
+order by res.CheckIn;
+                   """, [f_name, f_name, l_name, l_name, code, code, res_code, res_code, s_date, e_date, s_date, s_date, e_date, e_date])    
+
+    result = cursor.fetchall()
+    print(result)
+    conn.commit()
+    cursor.close()
+
+
+
 
 
 # view revenue details
 def fr5(conn):
-    pass
+
+    print("\nHere are the revenue details for the current calendar year: \n")
+
+    query = """
+with recursive dateSeries as (
+    select curdate() - interval dayofyear(curdate()) - 1 day as revenueDate
+    union all
+    select revenueDate + interval 1 day
+    from dateSeries
+    where revenueDate + interval 1 day <= last_day('2025-12-01')
+),
+dailyRevenue as (
+    select
+        res.Room,
+        r.basePrice,
+        d.revenueDate,
+        month(d.revenueDate) as revenueMonth,
+        round(case
+            when weekday(d.RevenueDate) < 5 then r.basePrice
+            else r.basePrice * 1.1
+        end) as dailyRate
+    from lab7_reservations res
+    join dateSeries d on d.revenueDate >= res.CheckIn and d.revenueDate < res.Checkout
+    join lab7_rooms r on res.Room = r.RoomCode
+)
+(select
+    r.RoomCode,
+    r.RoomName,
+    round(sum(case when revenueMonth = 1 then dailyRate else 0 end)) as Jan,
+    round(sum(case when revenueMonth = 2 then dailyRate else 0 end)) as Feb,
+    round(sum(case when revenueMonth = 3 then dailyRate else 0 end)) as Mar,
+    round(sum(case when revenueMonth = 4 then dailyRate else 0 end)) as Apr,
+    round(sum(case when revenueMonth = 5 then dailyRate else 0 end)) as May,
+    round(sum(case when revenueMonth = 6 then dailyRate else 0 end)) as Jun,
+    round(sum(case when revenueMonth = 7 then dailyRate else 0 end)) as Jul,
+    round(sum(case when revenueMonth = 8 then dailyRate else 0 end)) as Aug,
+    round(sum(case when revenueMonth = 9 then dailyRate else 0 end)) as Sep,
+    round(sum(case when revenueMonth = 10 then dailyRate else 0 end)) as Oct,
+    round(sum(case when revenueMonth = 11 then dailyRate else 0 end)) as Nov,
+    round(sum(case when revenueMonth = 12 then dailyRate else 0 end)) as Decm,
+    round(sum(dailyRate)) as totalRevenue
+from lab7_rooms r
+left join dailyRevenue dr on r.RoomCode = dr.Room
+group by r.RoomCode, r.RoomName)
+
+union all
+
+(select
+    'TOTAL' as RoomCode,
+    '' as RoomName,
+    round(sum(case when revenueMonth = 1 then dailyRate else 0 end)) as Jan,
+    round(sum(case when revenueMonth = 2 then dailyRate else 0 end)) as Feb,
+    round(sum(case when revenueMonth = 3 then dailyRate else 0 end)) as Mar,
+    round(sum(case when revenueMonth = 4 then dailyRate else 0 end)) as Apr,
+    round(sum(case when revenueMonth = 5 then dailyRate else 0 end)) as May,
+    round(sum(case when revenueMonth = 6 then dailyRate else 0 end)) as Jun,
+    round(sum(case when revenueMonth = 7 then dailyRate else 0 end)) as Jul,
+    round(sum(case when revenueMonth = 8 then dailyRate else 0 end)) as Aug,
+    round(sum(case when revenueMonth = 9 then dailyRate else 0 end)) as Sep,
+    round(sum(case when revenueMonth = 10 then dailyRate else 0 end)) as Oct,
+    round(sum(case when revenueMonth = 11 then dailyRate else 0 end)) as Nov,
+    round(sum(case when revenueMonth = 12 then dailyRate else 0 end)) as Decm,
+    round(sum(dailyRate)) as totalRevenue
+from dailyRevenue);             
+                 """
+    
+    df = pd.read_sql(query, conn)
+    print(df)
+
+
 
 
 
@@ -236,6 +448,12 @@ def menu(conn):
 
 
 
+
+
+
+
+
+
 def main():
     conn = connect()
     if not conn:
@@ -247,8 +465,11 @@ def main():
         menu(conn)
         quit = input("Would you like to continue your session? [Y/N] ")
         if quit.strip()[0] == 'N' or quit.strip()[0] == 'n':
-            print("Thank you for using the Cuties Inn room reservation system! We hope you have a great day!")
+            print("Thank you for using the Cuties Inn room reservation system! Have a fantabulous day!")
             break
+
+
+
 
 
 
