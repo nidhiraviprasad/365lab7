@@ -118,14 +118,14 @@ and (
     select count(*)
     from lab7_reservations res
     join lab7_rooms r on r.RoomCode = res.Room
-    where (r.RoomCode = %s)
+    where (r.RoomCode = %s or %s = 'Any' or %s = '')
     and (
         (res.CheckIn >= %s and res.Checkout < %s) or
         (res.CheckIn <= %s and res.Checkout > %s) or
         (res.CheckIn <= %s and res.Checkout > %s)
         )
     ) = 0;
-                   """, conn, params=(code, code, code, bed, bed, bed, numOccupants, code, ci, co, co, co, ci, ci))
+                   """, conn, params=(code, code, code, bed, bed, bed, numOccupants, code, code, code, ci, co, co, co, ci, ci))
     
     if (not room_details.empty):
         print("\nHere are all the rooms available according to your criteria: \n")
@@ -189,7 +189,7 @@ where (r.maxOcc >= %s);
 
         
         alternate_rooms = pd.read_sql("""
-select r.*
+(select r.*, %s as CheckIn, %s as CheckOut
 from lab7_rooms r
 where r.maxOcc >= %s
 and (
@@ -205,13 +205,29 @@ and (
 ) = 0
 order by abs(r.basePrice - 
     coalesce((select basePrice from lab7_rooms where RoomCode = %s), 0)
-);
-                   """, conn, params=(str(numOccupants), code, ci, co, ci, ci, co, co, code))
+))
+                                      
+union
+
+(select r.*, res.Checkout as CheckIn, date_add(res.Checkout, interval datediff(%s, %s) day) as CheckOut
+from lab7_rooms r
+join lab7_reservations res on r.RoomCode = res.Room
+where res.Checkout = (
+    select max(availDate)
+    from (
+        select res.Checkout as availDate
+        from lab7_reservations res
+        where res.Room = r.RoomCode
+    ) as sq
+));
+
+
+                   """, conn, params=(ci, co, str(numOccupants), code, ci, co, ci, ci, co, co, code, ci, co))
     
 
         print("\nUnfortunately, we were not able to find any rooms according to your criteria. Here are some similar rooms you can reserve: \n")
         alternate_rooms.index = alternate_rooms.index + 1
-        print(alternate_rooms)
+        print(alternate_rooms[:5])
 
         confirmation = input("\nWould you like to book any of the above rooms? [Y to confirm; any other key to cancel] " ).strip()
         if (not confirmation == 'Y' and not confirmation == 'y'):
