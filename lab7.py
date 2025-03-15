@@ -11,8 +11,8 @@ warnings.filterwarnings('ignore')
 
 
 def connect():
-    db_password = getpass.getpass()
-    conn = mysql.connector.connect(user='nravipra', password=db_password,
+    #db_password = getpass.getpass()
+    conn = mysql.connector.connect(user='nravipra', password='Wtr25_365_028829170', #password=db_password,
                                host='mysql.labthreesixfive.com',
                                database='nravipra')
     return conn
@@ -90,14 +90,31 @@ def fr2(conn):
     adults = input("Number of adults: ").strip()
     children = input("Number of children: ").strip()
 
+    if (f_name == ''):
+        print("Please provide a first name while making a reservation")
+        return
+    if (l_name == ''):
+        print("Please provide a last name while making a reservation")
+        return
+
+
     # perform input validation here before continuing with query
     checkin = checkin.split('/')
     checkout = checkout.split('/')
+    if (len(checkin) != 3 or len(checkin[0]) != 2 or len(checkin[1]) != 2 or len(checkin[2]) != 4 
+        or not checkin[0].isnumeric() or not checkin[1].isnumeric() or not checkin[2].isnumeric()):
+        print("Please provide a valid check in date (MM/DD/YYYY) while making a reservation")
+        return
+    if (len(checkout) != 3 or len(checkout[0]) != 2 or len(checkout[1]) != 2 or len(checkout[2]) != 4 
+        or not checkout[0].isnumeric() or not checkout[1].isnumeric() or not checkout[2].isnumeric()):
+        print("Please provide a valid check out date (MM/DD/YYYY) while making a reservation")
+        return
+
     checkin = datetime.date(int(checkin[2]), int(checkin[0]), int(checkin[1]))
     checkout = datetime.date(int(checkout[2]), int(checkout[0]), int(checkout[1]))
 
     if (checkin > checkout):
-        print("Invalid dates: checkin date is after checkout date")
+        print("Invalid dates: check in date is after check out date")
         return
     
     if (not children.isnumeric() or not adults.isnumeric()):
@@ -118,14 +135,14 @@ and (
     select count(*)
     from lab7_reservations res
     join lab7_rooms r on r.RoomCode = res.Room
-    where (r.RoomCode = %s or %s = 'Any' or %s = '')
+    where (r.RoomCode = %s)
     and (
         (res.CheckIn >= %s and res.Checkout < %s) or
         (res.CheckIn <= %s and res.Checkout > %s) or
         (res.CheckIn <= %s and res.Checkout > %s)
         )
     ) = 0;
-                   """, conn, params=(code, code, code, bed, bed, bed, numOccupants, code, code, code, ci, co, co, co, ci, ci))
+                   """, conn, params=(code, code, code, bed, bed, bed, numOccupants, code, ci, co, co, co, ci, ci))
     
     if (not room_details.empty):
         print("\nHere are all the rooms available according to your criteria: \n")
@@ -177,7 +194,6 @@ values (%s, %s, %s, %s, %s, %s, %s, %s, %s);
         
             
     else:
-
         result = pd.read_sql("""
 select count(*)
 from lab7_rooms r
@@ -220,7 +236,6 @@ where res.Checkout = (
         where res.Room = r.RoomCode
     ) as sq
 ));
-
 
                    """, conn, params=(ci, co, str(numOccupants), code, ci, co, ci, ci, co, co, code, ci, co))
     
@@ -300,7 +315,7 @@ WHERE CODE = %s
     
     if (not result.empty):
         print("Reservation details: ")
-        print(result)
+        print(result.to_string(index=False))
         confirmation = input("Are you sure you would like to cancel the above reservation? [Y to confirm; any other key to cancel] " ).strip()
         if (confirmation == 'Y' or confirmation == 'y'):
             cursor.execute("""
@@ -339,10 +354,18 @@ def fr4(conn):
 
     if (not start == ''):
         start = start.split('/')
+        if (len(start) != 3 or len(start[0]) != 2 or len(start[1]) != 2 or len(start[2]) != 4 
+        or not start[0].isnumeric() or not start[1].isnumeric() or not start[2].isnumeric()):
+            print("Please provide a valid start date (MM/DD/YYYY) while searching for reservations")
+            return
         start = datetime.date(int(start[2]), int(start[0]), int(start[1]))
         s_date = start.strftime("%Y-%m-%d")
     if (not end == ''):
         end = end.split('/')
+        if (len(end) != 3 or len(end[0]) != 2 or len(end[1]) != 2 or len(end[2]) != 4 
+        or not end[0].isnumeric() or not end[1].isnumeric() or not end[2].isnumeric()):
+            print("Please provide a valid end date (MM/DD/YYYY) while searching for reservations")
+            return
         end = datetime.date(int(end[2]), int(end[0]), int(end[1]))
         e_date = end.strftime("%Y-%m-%d")
 
@@ -368,6 +391,7 @@ order by res.CheckIn;
     result.index = result.index + 1
     print(result)
     conn.commit()
+
 
 
 
@@ -449,6 +473,7 @@ from dailyRevenue);
 
 
 
+
 def menu(conn):
     print("""
         1. View Popular Rooms
@@ -489,7 +514,7 @@ def main():
     while True:
         menu(conn)
         quit = input("Would you like to continue your session? [Y/N] ")
-        if quit.strip()[0] == 'N' or quit.strip()[0] == 'n':
+        if quit == '' or quit.strip()[0] == 'N' or quit.strip()[0] == 'n':
             print("Thank you for using the Cuties Inn room reservation system! Have a fantabulous day!")
             conn.close()
             break
