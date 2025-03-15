@@ -1,4 +1,4 @@
-# 365lab7
+# CSC 365 Lab 7
 
 Teammates: Nidhi Raviprasad and Riya Badadare
 
